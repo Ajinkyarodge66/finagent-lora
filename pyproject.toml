@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finagent-lora"
+version = "0.1.0"
+description = "LoRA fine-tuning a small open model into a reliable, injection-resistant financial tool-using agent"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "finagent-bench @ git+https://github.com/Ajinkyarodge66/finagent-bench",
+  "torch",
+  "transformers>=4.45",
+  "peft>=0.12",
+  "accelerate",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["finagent_lora"]
