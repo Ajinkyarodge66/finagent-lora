@@ -1,0 +1,109 @@
+name: train-and-eval
+# Manually triggered: Actions tab -> train-and-eval -> Run workflow.
+# Runs on GitHub's free CPU machines: the four experiments run as parallel jobs,
+# then a final job collects every result and commits it to results/.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Base model (small enough for CPU)"
+        default: "Qwen/Qwen2.5-0.5B-Instruct"
+        required: true
+      n_seeds:
+        description: "Training seeds (20 tasks each)"
+        default: "10"
+        required: true
+      epochs:
+        description: "Training epochs"
+        default: "1"
+        required: true
+      max_steps:
+        description: "Cap on training steps (-1 = no cap; small number = smoke test)"
+        default: "-1"
+        required: true
+      limit:
+        description: "Evaluate only the first N tasks (blank = all 20)"
+        default: ""
+        required: false
+
+permissions:
+  contents: write
+
+concurrency: train-and-eval
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, lora, lora-noinj, lora-nomh]
+    env:
+      MODEL: ${{ inputs.model }}
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      TOKENIZERS_PARALLELISM: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ inputs.model }}
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e .
+      - name: Build training data
+        if: matrix.variant != 'base'
+        run: |
+          case "${{ matrix.variant }}" in
+            lora)       extra="" ;;
+            lora-noinj) extra="--injection-rate 0" ;;
+            lora-nomh)  extra="--exclude multi_hop" ;;
+          esac
+          python -m finagent_lora.data --out data/train.jsonl --n-seeds ${{ inputs.n_seeds }} $extra
+      - name: Train
+        if: matrix.variant != 'base'
+        run: |
+          python -m finagent_lora.train --model "$MODEL" --data data/train.jsonl --out runs/adapter \
+            --epochs ${{ inputs.epochs }} --max-steps ${{ inputs.max_steps }} --batch 4 --grad-accum 2
+      - name: Evaluate on FinAgent-Bench
+        run: |
+          tag=$(basename "$MODEL" | tr '[:upper:]' '[:lower:]')
+          extra=""
+          if [ -n "${{ inputs.limit }}" ]; then extra="--limit ${{ inputs.limit }}"; fi
+          if [ "${{ matrix.variant }}" != "base" ]; then extra="$extra --adapter runs/adapter"; fi
+          python -m finagent_lora.evaluate --model "$MODEL" --name "$tag-${{ matrix.variant }}" --outdir results $extra \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -f runs/adapter/train_meta.json ]; then cp runs/adapter/train_meta.json "results/$tag-${{ matrix.variant }}_train_meta.json"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.variant }}
+          path: results/
+      - uses: actions/upload-artifact@v4
+        if: matrix.variant != 'base'
+        with:
+          name: adapter-${{ matrix.variant }}
+          path: runs/adapter/
+          retention-days: 30
+
+  collect:
+    needs: experiment
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: results
+          merge-multiple: true
+      - name: Commit results
+        run: |
+          git config user.name "Ajinkyarodge66"
+          git config user.email "ajinkyarodge66@gmail.com"
+          git add results/
+          git diff --cached --quiet && exit 0
+          git commit -m "Results: ${{ inputs.model }} (seeds=${{ inputs.n_seeds }}, epochs=${{ inputs.epochs }}, max_steps=${{ inputs.max_steps }})"
+          git pull --rebase origin main
+          git push
