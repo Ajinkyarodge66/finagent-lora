@@ -1,0 +1,11 @@
+{
+  "base_model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "data": "data/train.jsonl",
+  "examples": 20,
+  "epochs": 1.0,
+  "lr": 0.0002,
+  "batch": 8,
+  "lora_rank": 16,
+  "minutes": 4.9,
+  "loss_curve": []
+}
