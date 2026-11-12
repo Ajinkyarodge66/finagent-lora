@@ -64,7 +64,7 @@ pip install -e ".[dev]"
 python -m pytest -q                                  # runs on CPU with a tiny offline model
 python -m finagent_lora.data --out data/train.jsonl  # 400 verified examples (--n-seeds 10 for 200)
 python -m finagent_lora.train --model Qwen/Qwen2.5-0.5B-Instruct --data data/train.jsonl --out runs/lora
-python -m finagent_lora.evaluate --adapter runs/lora --name lora
+python -m finagent_lora.evaluate --model Qwen/Qwen2.5-0.5B-Instruct --adapter runs/lora --name lora
 ```
 
 ## Testing
