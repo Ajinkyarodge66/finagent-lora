@@ -73,13 +73,13 @@ jobs:
           extra=""
           if [ -n "${{ inputs.limit }}" ]; then extra="--limit ${{ inputs.limit }}"; fi
           if [ "${{ matrix.variant }}" != "base" ]; then extra="$extra --adapter runs/adapter"; fi
-          python -m finagent_lora.evaluate --model "$MODEL" --name "$tag-${{ matrix.variant }}" --outdir results $extra \
+          python -m finagent_lora.evaluate --model "$MODEL" --name "$tag-${{ matrix.variant }}" --outdir out $extra \
             | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ -f runs/adapter/train_meta.json ]; then cp runs/adapter/train_meta.json "results/$tag-${{ matrix.variant }}_train_meta.json"; fi
+          if [ -f runs/adapter/train_meta.json ]; then cp runs/adapter/train_meta.json "out/$tag-${{ matrix.variant }}_train_meta.json"; fi
       - uses: actions/upload-artifact@v4
         with:
           name: results-${{ matrix.variant }}
-          path: results/
+          path: out/  # only this experiment's files, never the checked-out results/
       - uses: actions/upload-artifact@v4
         if: matrix.variant != 'base'
         with:
@@ -96,10 +96,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: results-*
-          path: results
-          merge-multiple: true
+          path: artifacts  # one folder per experiment; no merging
       - name: Commit results
         run: |
+          mkdir -p results
+          cp artifacts/results-*/* results/
           git config user.name "Ajinkyarodge66"
           git config user.email "ajinkyarodge66@gmail.com"
           git add results/

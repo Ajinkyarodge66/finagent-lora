@@ -1,0 +1,48 @@
+name: collect-results
+# Re-collect results from an earlier train-and-eval run without retraining.
+# Each experiment's artifact is downloaded into its own folder and only that
+# experiment's files are copied, so no artifact can overwrite another's results.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID of the train-and-eval run"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: artifacts
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Copy each experiment's own files
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          for dir in artifacts/results-*; do
+            variant="${dir#artifacts/results-}"
+            for f in "$dir"/*-"$variant".json "$dir"/*-"$variant"_*; do
+              [ -f "$f" ] || continue
+              if [[ "$f" == *.json ]]; then python -c "import json,sys; json.load(open(sys.argv[1]))" "$f"; fi
+              cp "$f" results/
+              echo "copied $f"
+            done
+          done
+      - name: Commit results
+        run: |
+          git config user.name "Ajinkyarodge66"
+          git config user.email "ajinkyarodge66@gmail.com"
+          git add results/
+          git diff --cached --quiet && exit 0
+          git commit -m "Re-collect results from run ${{ inputs.run_id }}"
+          git pull --rebase origin main
+          git push
