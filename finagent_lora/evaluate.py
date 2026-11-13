@@ -97,8 +97,8 @@ def load(model_name: str, adapter: str | None):
 
 
 def run(model, tok, name: str, outdir: str = "results", limit: int | None = None,
-        seed: int = 7, max_steps: int = 10) -> dict:
-    tasks = build_tasks(seed)[:limit]
+        seed: int = 7, max_steps: int = 10, attack: str = "blunt") -> dict:
+    tasks = build_tasks(seed, attack=attack)[:limit]
     agent = LLMAgent(hf_backend(model, tok), name=name, max_steps=max_steps)
     result = evaluate_repeated(agent, tasks, 1)  # greedy decoding is deterministic
     os.makedirs(outdir, exist_ok=True)
@@ -117,9 +117,10 @@ def main() -> None:
     p.add_argument("--name", required=True, help="label for the results files")
     p.add_argument("--limit", type=int)
     p.add_argument("--outdir", default="results")
+    p.add_argument("--attack", default="blunt", help="FinAgent-Bench attack style: blunt | correction | correction_top")
     a = p.parse_args()
     model, tok = load(a.model, a.adapter)
-    run(model, tok, a.name, a.outdir, a.limit)
+    run(model, tok, a.name, a.outdir, a.limit, attack=a.attack)
 
 
 if __name__ == "__main__":

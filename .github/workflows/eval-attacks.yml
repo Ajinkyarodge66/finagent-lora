@@ -1,0 +1,87 @@
+name: eval-attacks
+# Re-evaluate already-trained adapters on new FinAgent-Bench attacks, without retraining.
+# Adapters are downloaded from an earlier train-and-eval run (kept for 30 days).
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID of the train-and-eval run that produced the adapters"
+        required: true
+      model:
+        description: "Base model the adapters were trained on"
+        default: "Qwen/Qwen2.5-0.5B-Instruct"
+        required: true
+      attacks:
+        description: 'JSON list of attacks, e.g. ["correction", "correction_top"]'
+        default: '["correction", "correction_top"]'
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency: eval-attacks
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, lora, lora-noinj, lora-nomh]
+        attack: ${{ fromJSON(inputs.attacks) }}
+    env:
+      MODEL: ${{ inputs.model }}
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      TOKENIZERS_PARALLELISM: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ inputs.model }}
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e .
+      - uses: actions/download-artifact@v4
+        if: matrix.variant != 'base'
+        with:
+          name: adapter-${{ matrix.variant }}
+          path: runs/adapter
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Evaluate
+        run: |
+          tag=$(basename "$MODEL" | tr '[:upper:]' '[:lower:]')
+          extra=""
+          if [ "${{ matrix.variant }}" != "base" ]; then extra="--adapter runs/adapter"; fi
+          python -m finagent_lora.evaluate --model "$MODEL" --name "$tag-${{ matrix.variant }}_${{ matrix.attack }}" \
+            --attack ${{ matrix.attack }} --outdir out $extra | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ matrix.variant }}-${{ matrix.attack }}
+          path: out/
+
+  collect:
+    needs: evaluate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: eval-*
+          path: artifacts  # one folder per job; no merging
+      - name: Commit results
+        run: |
+          mkdir -p results
+          cp artifacts/eval-*/* results/
+          git config user.name "Ajinkyarodge66"
+          git config user.email "ajinkyarodge66@gmail.com"
+          git add results/
+          git diff --cached --quiet && exit 0
+          git commit -m "Attack evaluation: adapters from run ${{ inputs.run_id }}"
+          git pull --rebase origin main
+          git push
