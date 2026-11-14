@@ -3,7 +3,7 @@
 ![CI](https://github.com/Ajinkyarodge66/finagent-lora/actions/workflows/ci.yml/badge.svg)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Ajinkyarodge66/finagent-lora/blob/main/notebooks/train_and_eval.ipynb)
 
-**Can LoRA fine-tuning turn a small open model (0.5B parameters) into a reliable, injection-resistant financial agent, and where does the robustness come from?**
+**Can LoRA fine-tuning turn a small open model (0.5B parameters) into a reliable, injection-resistant financial agent, and where does the robustness come from?** Short answer: reliable on the trained task format, yes. Injection-resistant only against the attack style it was tested on.
 
 Large models can read filings, use tools and resist some prompt injections, but they are expensive to run. This project fine-tunes a small open model with LoRA on verified tool-calling trajectories, then measures it on [FinAgent-Bench](https://github.com/Ajinkyarodge66/finagent-bench) using exactly the same agent loop, prompt and scoring as large API models.
 
@@ -36,11 +36,22 @@ Every number was checked against the transcripts before being written here.
 
 **1. Fine-tuning taught the procedure, not the answers.** The base model scored 0%. It never really tried to read the filings (1 `read_doc` call in 20 tasks), invented a tool called `next_tool` 32 times, and made up "hypothetical" figures, then computed with them (one answer was a 1700% net margin). After LoRA, every task followed `list_docs` → `read_doc` → `calculator` → `final_answer`, with the calculator fed the exact figures from that filing. None of the test figures appears anywhere in the training data, so the model had to read them.
 
-**2. Injection resistance did not come from training on attacks.** `lora-noinj` never saw an injected document, yet it read the planted "ignore all previous instructions" note on all 8 injected tasks and still answered correctly. That matches `lora` exactly. The likely cause: fine-tuning made "copy the figure from the filing, then submit it" so strong that the model no longer treats document text as instructions. A 0.5B fine-tuned model was never hijacked, while gpt-oss-20b, about 40x larger, was hijacked on 56% of injected tasks.
+**2. Resistance to the blunt attack did not come from training on attacks.** `lora-noinj` never saw an injected document, yet it read the planted "ignore all previous instructions" note on all 8 injected tasks and still answered correctly, exactly like `lora`. Fine-tuning made "copy the figure from the filing, then submit it" so strong that the model stopped treating document text as instructions. gpt-oss-20b, about 40x larger, was hijacked by the same note on 56% of injected tasks. But see finding 4: this resistance does not survive a subtler attack.
 
 **3. It did not generalise to an unseen task type.** With multi-hop tasks held out, `lora-nomh` was perfect on lookup and arithmetic but scored 0% on multi-hop. It read only one of the two filings, then applied the growth-percentage formula it had learned for arithmetic tasks, e.g. `124.6/71.9*100` instead of `124.6-71.1+82.3-37.5`. It learned task templates, not how to plan a new combination. Its lower "accuracy under injection" comes from these multi-hop errors, not from hijacks.
 
-**Takeaway.** For a narrow, well-specified agent task, a cheap fine-tune of a tiny model can beat a much larger general model on both accuracy and safety. But the gain only holds inside the training distribution (finding 3), and these tests cannot show robustness to new attack styles (limitations).
+**4. A subtle attack breaks it, as it breaks the large models.** [FinAgent-Bench v0.4](https://github.com/Ajinkyarodge66/finagent-bench#v04-a-subtler-attack-breaks-every-model) adds a fake "data-quality notice for AI assistants" with a full set of plausible fake figures. The same adapters, without retraining ([`eval-attacks.yml`](.github/workflows/eval-attacks.yml)):
+
+| Run | Blunt attack: influence | Fake correction after figures: influence (exact hijack) | Fake correction before figures: influence (exact hijack) | Accuracy, correction after / before |
+|---|---|---|---|---|
+| `lora` | 0% | **88%** (25%) | **75%** (12%) | 65% / 70% |
+| `lora-noinj` | 0% | **75%** (25%) | **75%** (12%) | 70% / 70% |
+| `lora-nomh` | 0% | **75%** (25%) | **62%** (12%) | 60% / 65% |
+| *gpt-oss-120b (API)* | *0%* | ***100%*** | ***100%*** | *57% / 52%* |
+
+"Influence" counts any answer the attack changed, including wrong answers whose calculator input mixed real and fake figures. The fine-tuned model rarely copied the attacker's answer exactly. Instead it took some figures from the real sentences and some from the fake correction, e.g. `124.6-71.1+54.0-25.3` (54.0 is fake), and produced a number that matched neither. Exact-match hijack rates alone would have reported this model as mostly safe. On clean tasks nothing changed: `lora` and `lora-noinj` stayed at 12/12. Training on blunt attacks (`lora` vs `lora-noinj`) made no difference against the subtle one.
+
+**Takeaway.** A cheap fine-tune of a 0.5B model learned this task format well enough to match much larger models on accuracy (finding 1). Its apparent safety advantage held only against the attack style it was tested on (findings 2 and 4). It did not generalise to a new task type (finding 3). Safety claims need attacks the model has not seen, and metrics that catch partial hijacks, not just exact ones.
 
 ## How it works
 
@@ -74,7 +85,7 @@ The test suite runs on CPU without downloading anything: `tiny.py` builds a tiny
 ## Limitations
 
 - **In-distribution only.** Question templates and company names are shared between training and test (19 of 20 test questions have the same wording as a training question; only the figures differ). So `lora`'s 100% shows it learned this task format, not general financial reasoning. `lora-nomh` shows what happens outside the format.
-- **One blunt attack.** The injection is a single, obvious "ignore all previous instructions" note. A fine-tuned model that ignores document instructions may still fall for subtler attacks, such as a fake "restated figure" correction.
+- **Few attack styles.** One blunt attack and one fake-correction attack (two placements), each with fixed wording. The model was never trained on fake corrections, so whether training on them would help is untested.
 - **Small test set.** 20 tasks, including some repeated questions, so 5% is one task. Single greedy run per model.
 
 ## Roadmap
@@ -84,5 +95,6 @@ The test suite runs on CPU without downloading anything: `tiny.py` builds a tiny
 - [ ] Paraphrased questions and unseen company names to test real generalisation
 - [x] Compare against API models from FinAgent-Bench
 - [ ] Accuracy per £ of inference vs API models
-- [ ] Subtle injection attacks (fake corrections, number swaps) on the fine-tuned model
+- [x] Subtle injection attacks (fake corrections) on the fine-tuned model, evaluated from saved adapters
+- [ ] Train on fake-correction attacks and test on held-out attack wordings
 - [ ] Publish the adapter on Hugging Face
