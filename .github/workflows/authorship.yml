@@ -1,0 +1,19 @@
+name: authorship
+# Fails if any commit is not authored and committed by the repo owner, or carries
+# co-author / AI attribution lines. Keeps the contributor list to the owner only.
+on: [push, workflow_dispatch]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Every commit is by Ajinkyarodge66, with no attribution lines
+        run: |
+          bad=$(git log --format='%H %an <%ae> | %cn <%ce>' | grep -v ' Ajinkyarodge66 <ajinkyarodge66@gmail.com> | Ajinkyarodge66 <ajinkyarodge66@gmail.com>$' || true)
+          attr=$(git log --format='%H %B' | grep -iE 'co-authored-by|claude|anthropic|generated with' || true)
+          if [ -n "$bad$attr" ]; then
+            echo "Commits with another author or attribution lines:"; echo "$bad"; echo "$attr"; exit 1
+          fi
+          echo "All $(git rev-list --count HEAD) commits are by Ajinkyarodge66."
